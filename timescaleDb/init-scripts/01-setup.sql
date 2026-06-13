@@ -1,0 +1,10 @@
+
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+CREATE TABLE IF NOT EXISTS logs(
+    time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    modelName VARCHAR NOT NULL ,
+    input_tokens INT,
+    output_tokens INT
+
+);

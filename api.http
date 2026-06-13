@@ -1,0 +1,10 @@
+
+
+POST http://localhost:3004/
+Content-Type: application/json
+
+{ 
+    "modelName": "delSDSADSAD54s", 
+    "input_tokens": 333 , 
+    "output_tokens":2000
+}

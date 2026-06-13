@@ -1,83 +1,114 @@
 # LLM Tracker
 
-A lightweight proof-of-concept for tracking LLM usage in an event-driven architecture.
+A lightweight proof-of-concept for tracking LLM usage in an event-driven architecture using Redis as a queue.
 
-This repository shows how a client-side LLM SDK can emit usage telemetry, route it through a request handler, and then store/consume it from an event queue.
+This repo demonstrates how an SDK can emit usage telemetry, a request handler service can enqueue events, and a separate consumer service can process those events asynchronously.
 
-## Project Concept
+## Project structure
 
-The code is intentionally simple and mock-based, but the architecture is designed around a core idea:
+- `sdk/`
+  - Mock tracker implementation
+  - Builds tracking payloads for model name, input tokens, and output tokens
+- `requestHandlerService/`
+  - Flask app that receives tracking payloads via HTTP POST
+  - Pushes events into a Redis queue
+- `consumerService/`
+  - TypeScript service that polls Redis and consumes queued events
+- `timescaleDb/`
+  - PostgreSQL/TimescaleDB Docker setup with a table for logs
 
-- Track LLM prompt/completion token usage
-- Emit events from the SDK
-- Buffer events in a queue
-- Consume events asynchronously in a separate service
+## How it works
 
-This is useful when you want usage tracking to be decoupled from request execution and when you want a scalable, event-style pipeline.
+1. The SDK creates a tracking payload and sends it to `requestHandlerService`
+2. `requestHandlerService` stores the payload in Redis with `LPUSH`
+3. `consumerService` reads the payload with `RPOP`
+4. The consumer processes the data and optionally persists it to the database
 
-## Architecture
+## Requirements
 
-The project is split into three main pieces:
+- Docker
+- Docker Compose
+- A valid `.env` file in the repo root with Redis and database settings
 
-1. `sdk/`
-   - Contains a mock `Tracker` that simulates an LLM call
-   - Builds tracking payloads with model name, prompt tokens, and completion tokens
-   - Intended to send events to the request handler
+## Running the project
 
-2. `requestHandlerService/`
-   - A simple Flask app that accepts POST events
-   - Pushes received tracking events into a Redis-backed queue
-   - Represents the event entry point
+From the repo root:
 
-3. `consumerService/`
-   - A queue consumer that polls Redis and processes events
-   - Represents the downstream consumer/storage component
-
-> `dbService/` is currently empty in this repo, but the pattern implies this is where persisted usage events or analytics consumers would live.
-
-## Event Flow
-
-The tracking flow is:
-
-1. Client code calls `sdk/src/tracker.ts`
-2. `Tracker.proxy()` simulates an LLM response and builds a tracking payload
-3. The payload is sent to `requestHandlerService/main.py`
-4. The Flask service pushes the payload into a Redis queue using `LPUSH`
-5. `consumerService/src/consumer.ts` polls the same queue with `RPOP`
-6. The consumer processes the event and resets poll backoff
-
-### Diagram
-
-```mermaid
-graph TD
-  SDK["Client / SDK<br/>(tracker.ts)"]
-  API["Request Handler Service<br/>(Flask POST endpoint)"]
-  QUEUE["Redis Queue<br/>(Upstash Redis)"]
-  CONSUMER["Consumer Service<br/>(consumer.ts)"]
-  TSDB["Time-series DB<br/>(future storage)"]
-
-  SDK --> API
-  API --> QUEUE
-  QUEUE --> CONSUMER
-  CONSUMER --> TSDB
+```bash
+docker compose up --build
 ```
 
-## What is mocked here
+This starts:
 
-- `sdk/src/tracker.ts` does not call a real LLM.
-- `sendPrompt()` returns randomized token usage values.
-- `sendTrackRequest()` is a TODO placeholder for the actual HTTP/queue call.
-- `consumerService` prints consumed events rather than persisting them.
+- `db` — PostgreSQL / TimescaleDB container
+- `rhs` — request handler service on port `3004`
+- `cs` — consumer service
 
-## How to explore the code
+## Environment variables
 
-- `sdk/src/tracker.ts` — mock tracking client
-- `requestHandlerService/main.py` — POST endpoint and Redis enqueue logic
-- `consumerService/src/consumer.ts` — Redis queue consumer
-- `sdk/src/types.ts` — tracking payload and response type definitions
+The Compose setup uses the root `.env` file for both `rhs` and `cs`.
 
-## Notes
+This repository does not include the `.env` file, so you must create it locally before running the services.
 
-- The architecture is intentionally simple and can be expanded into a real tracking pipeline.
-- In production, replace the mock LLM and TODO HTTP call with a real LLM request + event transport.
-- Add persistent storage, metrics, and retries to make this a full observability pipeline.
+### Required fields
+
+- `UPSTASH_REDIS_REST_URL` — your Upstash Redis REST endpoint
+- `UPSTASH_REDIS_REST_TOKEN` — your Upstash Redis REST token
+- `QUEUE_NAME` — the queue key used by both request handler and consumer
+- `DB_HOST` — database hostname
+- `DB_PORT` — database port
+- `DATABASE` — database name
+- `DB_USER` — database user
+- `DB_PASSWORD` — database password
+
+### Example `.env`
+
+```env
+UPSTASH_REDIS_REST_URL=https://<your-upstash-host>.upstash.io
+UPSTASH_REDIS_REST_TOKEN=<your-upstash-token>
+QUEUE_NAME=firstQueue
+DB_HOST=db
+DB_PORT=5432
+DATABASE=mydb
+DB_USER=postgres
+DB_PASSWORD=mysecret
+```
+
+> If you are running with Docker Compose, use `DB_HOST=db` so the consumer container can resolve the database service by its Compose service name.
+
+### Formatting notes
+
+- Do not include quotes around values unless the value itself contains spaces.
+- Do not add trailing commas at the end of lines.
+- Keep the `.env` file local and do not commit it to source control.
+
+## Testing the flow
+
+1. Send a POST to the request handler:
+
+```bash
+curl -X POST http://localhost:3004/ \
+  -H 'Content-Type: application/json' \
+  -d '{"modelName":"gpt-test","input_tokens":10,"output_tokens":20}'
+```
+
+2. The request handler pushes the payload into Redis.
+3. The consumer polls Redis and handles the queued item.
+
+## Important notes
+
+- `requestHandlerService/main.py` currently logs received payloads and pushes them to the queue.
+- `consumerService/src/consumer.ts` polls Redis in a loop and consumes events.
+- If the container image is built from stale sources, rebuild with `docker compose up --build`.
+
+## Useful files
+
+- `consumerService/src/consumer.ts` — consumer logic
+- `requestHandlerService/main.py` — HTTP enqueue endpoint
+- `timescaleDb/init-scripts/01-setup.sql` — database table creation
+
+## Next steps
+
+- Replace the mock SDK and API integration with a real LLM transport layer
+- Add robust error handling and retries for queue and DB failures
+- Persist consumed events into the database table instead of console logging
